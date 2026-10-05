@@ -654,10 +654,9 @@ iasecc_init(struct sc_card *card)
 		rv = iasecc_init_amos_or_sagem(card);
 	else if (card->type == SC_CARD_TYPE_IASECC_AMOS)
 		rv = iasecc_init_amos_or_sagem(card);
-	else if (card->type == SC_CARD_TYPE_IASECC_MONACO) {
+	else if (card->type == SC_CARD_TYPE_IASECC_MONACO)
 		rv = iasecc_init_amos_or_sagem(card);
-		card->caps &= ~((unsigned long)SC_CARD_CAP_ISO7816_PIN_INFO);
-	} else if (card->type == SC_CARD_TYPE_IASECC_MI)
+	else if (card->type == SC_CARD_TYPE_IASECC_MI)
 		rv = iasecc_init_amos_or_sagem(card);
 	else if (iasecc_is_cpx(card))
 		rv = iasecc_init_cpx(card);
@@ -2002,9 +2001,8 @@ iasecc_pin_verify(struct sc_card *card, struct sc_pin_cmd_data *data)
 		if (pin_cmd.pin1.logged_in & SC_PIN_STATE_LOGGED_IN)
 			if (iasecc_chv_cache_is_verified(card, &pin_cmd))
 				LOG_FUNC_RETURN(ctx, SC_SUCCESS);
-	} else if (rv == SC_ERROR_NOT_SUPPORTED) {
-		sc_log(ctx, "PIN status unavailable on this card; verifying anyway");
-	} else if (rv != SC_ERROR_SECURITY_STATUS_NOT_SATISFIED) {
+	}
+	else if (rv != SC_ERROR_SECURITY_STATUS_NOT_SATISFIED)   {
 		LOG_FUNC_RETURN(ctx, rv);
 	}
 
@@ -2095,12 +2093,12 @@ iasecc_pin_get_policy (struct sc_card *card, struct sc_pin_cmd_data *data, struc
 
 	rv = iasecc_sdo_get_data(card, &sdo);
 	if (rv == SC_ERROR_DATA_OBJECT_NOT_FOUND) {
-		/* The card, e.g. Monaco eID, does not expose the CHV SDO.  Its only role here is the
+		/* The card does not expose the CHV SDO.  Its only role here is the
 		 * secure-messaging SCBs and the advisory PIN length/tries; a plain
 		 * (non-SM) verify with "unknown" for the rest is what this card wants.
 		 * The PIN value and padding come from the PKCS#15 AODF, so verification
 		 * still works. */
-		sc_log(ctx, "Monaco eID: no CHV SDO on card, plain verify without SM");
+		sc_log(ctx, "no CHV SDO on card, plain verify without SM");
 		memset(pin->scbs, 0, sizeof(pin->scbs));
 		pin->min_length = -1;
 		pin->max_length = -1;
@@ -2177,13 +2175,7 @@ iasecc_pin_get_info(struct sc_card *card, struct sc_pin_cmd_data *data)
 	 * policy takes precedence.
 	 */
 	rv = iasecc_pin_get_status(card, data);
-	if (rv == SC_ERROR_NOT_SUPPORTED) {
-		sc_log(ctx, "PIN status unavailable on this card; reporting the policy alone");
-		data->pin1.tries_left = -1;
-		data->pin1.logged_in = SC_PIN_STATE_UNKNOWN;
-	} else {
-		LOG_TEST_RET(ctx, rv, "Failed to get PIN status");
-	}
+	LOG_TEST_RET(ctx, rv, "Failed to get PIN status");
 
 	rv = iasecc_pin_get_policy(card, data, &policy);
 	LOG_TEST_RET(ctx, rv, "Failed to get PIN policy");
@@ -2898,41 +2890,11 @@ iasecc_sdo_get_tagged_data(struct sc_card *card, int sdo_tag, struct iasecc_sdo 
 	LOG_FUNC_RETURN(ctx, rv);
 }
 
-/* The Monaco eID answers 6A88 to 'GET DATA' for its RSA private keys: the card
- * holds the keys but publishes no SDO describing them.  Rather than teach every
- * consumer of iasecc_sdo_get_data() to cope with a missing SDO, describe the
- * configuration the card does have.  Both of its keys are 2048-bit -- that is
- * what its own PKCS#15 PrKDF and its certificates say -- and both are used
- * without secure messaging.  Deciphering is not asserted here: the card has not
- * been observed to do it, so that ACL is left at its "never" default. */
-static int
-iasecc_sdo_virtual_monaco(struct sc_card *card, struct iasecc_sdo *sdo, unsigned char sdo_class)
-{
-	if (sdo_class != IASECC_SDO_CLASS_RSA_PRIVATE)
-		return SC_ERROR_DATA_OBJECT_NOT_FOUND;
-
-	sdo->docp.size.value = calloc(1, 2);
-	if (sdo->docp.size.value == NULL)
-		return SC_ERROR_OUT_OF_MEMORY;
-	sdo->docp.size.value[0] = 0x01; /* 0x0100 bytes == 2048-bit modulus */
-	sdo->docp.size.size = 2;
-
-	sdo->docp.amb = IASECC_ACL_PSO_SIGNATURE | IASECC_ACL_INTERNAL_AUTHENTICATE;
-	sdo->docp.scbs[0] = 0x00; /* PSO compute signature: no condition */
-	sdo->docp.scbs[1] = 0x00; /* internal authenticate: no condition */
-
-	sc_log(card->ctx, "Monaco eID: no RSA private SDO on card, using the card's known configuration");
-	return SC_SUCCESS;
-}
 
 static int
 iasecc_sdo_get_data(struct sc_card *card, struct iasecc_sdo *sdo)
 {
 	struct sc_context *ctx = card->ctx;
-	/* Parsing the card's answer overwrites the SDO header, so remember what was
-	 * asked for before the request goes out. */
-	unsigned char sdo_class = sdo->sdo_class;
-	unsigned char sdo_ref = sdo->sdo_ref;
 	int rv, sdo_tag;
 
 	LOG_FUNC_CALLED(ctx);
@@ -2945,14 +2907,6 @@ iasecc_sdo_get_data(struct sc_card *card, struct iasecc_sdo *sdo)
 		LOG_TEST_RET(ctx, rv, "cannot parse ECC SDO data");
 
 	rv = iasecc_sdo_get_tagged_data(card, IASECC_DOCP_TAG, sdo);
-	if (rv == SC_ERROR_DATA_OBJECT_NOT_FOUND && card->type == SC_CARD_TYPE_IASECC_MONACO) {
-		rv = iasecc_sdo_virtual_monaco(card, sdo, sdo_class);
-		if (rv == SC_SUCCESS) {
-			sdo->sdo_class = sdo_class;
-			sdo->sdo_ref = sdo_ref;
-		}
-		LOG_FUNC_RETURN(ctx, rv);
-	}
 	LOG_TEST_RET(ctx, rv, "cannot parse ECC DOCP data");
 
 	LOG_FUNC_RETURN(ctx, rv);
